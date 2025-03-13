@@ -109,7 +109,6 @@ const FeedAdmin = ({ user, dispatchUser }) => {
     })();
   }, [user]);
 
-  // Pagination logic
   const totalPages = Math.ceil(files.length / ITEMS_PER_PAGE);
   const startIndex = (currentPage - 1) * ITEMS_PER_PAGE;
   const endIndex = startIndex + ITEMS_PER_PAGE;
@@ -174,18 +173,11 @@ const FeedAdmin = ({ user, dispatchUser }) => {
           <Container>
             <Paper
               elevation={1}
-              style={{ display: "flex", justifyContent: "space-between" }}
+              style={{ display: "flex", justifyContent: "space-around" }}
             >
               <Link to={"/upload-file"}>
                 <Button rightSection={<IconCloudUpload />}> Upload File</Button>
               </Link>
-
-              <Link to={"/change-password"}>
-                <Button>Change Password</Button>
-              </Link>
-              <Box>
-                <Button onClick={logout}>Logout</Button>
-              </Box>
             </Paper>
           </Container>
           <div className="shadow border-b-4">

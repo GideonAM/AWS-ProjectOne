@@ -23,7 +23,7 @@ export const HomePage = () => {
             <Text size={smallTextSize} fw={300}>
               to the File Server
             </Text>
-            <Link to={"/login"}>
+            <Link to={"/admin"}>
               <Button
                 variant="light"
                 rightSection={<IconArrowRight size={14} />}

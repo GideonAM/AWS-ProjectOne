@@ -17,7 +17,7 @@ import fileImage from "../../public/images/home-hero.webp";
 import { notifications } from "@mantine/notifications";
 import { responsivenes } from "../utils/responsivenes";
 
-const FileUpload = ({ user }) => {
+const FileUpload = () => {
   const [fileBody, setFilebody] = useState({
     title: "",
     description: "",
@@ -37,14 +37,14 @@ const FileUpload = ({ user }) => {
     e.preventDefault();
     fileBody.file = file[0];
     let formData = new FormData();
-    formData.append("title", fileBody.title);
-    formData.append("description", fileBody.description);
+//     formData.append("title", fileBody.title);
+//     formData.append("description", fileBody.description);
     formData.append("file", file[0]);
 
     try {
       setIsLoading(true);
       const { data } =
-        (await FileServerEndpoints.uploadFile(formData, user)) || {};
+        (await FileServerEndpoints.uploadFile(formData)) || {};
       setMessage(data);
       setIsLoading(false);
       notifications?.show({
@@ -112,7 +112,7 @@ const FileUpload = ({ user }) => {
               <Button onClick={uploadFile} mr={10}>
                 Upload
               </Button>
-              <Link to={"/admin"}>
+              <Link to={"/"}>
                 <Button
                   variant="light"
                   leftSection={<IconArrowBack size={14} />}

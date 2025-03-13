@@ -1,9 +1,6 @@
 package com.awsprojectone.backend.service;
 
-import com.awsprojectone.backend.auth.SendMails;
 import com.awsprojectone.backend.dto.S3ObjectInfo;
-import com.awsprojectone.backend.exception.FileNotFound;
-import com.awsprojectone.backend.repository.FileRepository;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
 import com.amazonaws.services.s3.model.PutObjectRequest;
@@ -24,16 +21,13 @@ import java.util.List;
 
 @Service
 @RequiredArgsConstructor
-public class FileServerServiceImpl implements FileServerService{
+public class FileServerServiceImpl {
 
-    private final FileRepository fileRepository;
-    private final SendMails sendMails;
     private final AmazonS3 amazonS3;
 
     @Value("${application.bucket.name}")
     private String bucketName;
 
-    @Override
     public String uploadFile(MultipartFile multipartFile, String title, String description) throws MaxUploadSizeExceededException {
         File convertedFile = convertMultipartToFile(multipartFile);
         String fileName = System.currentTimeMillis() + multipartFile.getOriginalFilename();
@@ -63,7 +57,6 @@ public class FileServerServiceImpl implements FileServerService{
         }
     }
 
-    @Override
     public List<S3ObjectInfo> adminGetAllFiles() {
         ListObjectsV2Result objectsV2Result = amazonS3.listObjectsV2(bucketName);
         String region = amazonS3.getRegionName();
@@ -73,8 +66,7 @@ public class FileServerServiceImpl implements FileServerService{
                 .toList();
     }
 
-    @Override
-    public String deleteFileByName(String fileId) throws FileNotFound {
+    public String deleteFileByName(String fileId) {
         amazonS3.deleteObject(bucketName, fileId);
         return "File deleted successfully";
     }
