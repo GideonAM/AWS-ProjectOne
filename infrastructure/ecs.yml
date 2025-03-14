@@ -1,0 +1,514 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'ECS Cluster with Blue/Green deployment capability and auto-scaling'
+
+Parameters:
+  VpcStackName:
+    Type: String
+    Description: Name of the VPC Stack
+    Default: project-one-vpc
+
+  BackendImage:
+    Type: String
+    Description: Backend Docker image URI
+    Default: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/project-one/backend:latest
+
+  FrontendImage:
+    Type: String
+    Description: Frontend Docker image URI
+    Default: ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/project-one/frontend:latest
+
+  MinCapacity:
+    Type: Number
+    Default: 2
+    Description: Minimum number of tasks
+
+  MaxCapacity:
+    Type: Number
+    Default: 10
+    Description: Maximum number of tasks
+
+  CPUTargetValue:
+    Type: Number
+    Default: 70
+    Description: Target CPU utilization (%)
+
+Resources:
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: project-one-cluster
+      ClusterSettings:
+        - Name: containerInsights
+          Value: enabled
+
+  ECSTaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+        - arn:aws:iam::aws:policy/AmazonECR-FullAccess
+
+  CodeDeployServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codedeploy.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AWSCodeDeployRoleForECS
+
+  BackendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: project-one-backend
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      ContainerDefinitions:
+        - Name: backend
+          Image: !Ref BackendImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 8080
+              HostPort: 8080
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref BackendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: backend
+
+  FrontendTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: project-one-frontend
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !Ref ECSTaskExecutionRole
+      ContainerDefinitions:
+        - Name: frontend
+          Image: !Ref FrontendImage
+          Essential: true
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 80
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref FrontendLogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: frontend
+
+  BackendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/project-one-backend
+      RetentionInDays: 30
+
+  FrontendLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /ecs/project-one-frontend
+      RetentionInDays: 30
+
+  ALBSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ALB
+      VpcId:
+        Fn::ImportValue: !Sub "${VpcStackName}-VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+
+  ECSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for ECS tasks
+      VpcId:
+        Fn::ImportValue: !Sub "${VpcStackName}-VPC"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 8080
+          ToPort: 8080
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref ALBSecurityGroup
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: project-one-alb
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+      Subnets:
+        Fn::Split:
+          - ','
+          - Fn::ImportValue: !Sub "${VpcStackName}-PublicSubnets"
+      SecurityGroups:
+        - !Ref ALBSecurityGroup
+
+  # Backend Blue Target Group
+  BackendBlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: backend-blue-tg
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub "${VpcStackName}-VPC"
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  # Backend Green Target Group
+  BackendGreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: backend-green-tg
+      Port: 8080
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub "${VpcStackName}-VPC"
+      HealthCheckPath: /health
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  # Frontend Blue Target Group
+  FrontendBlueTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: frontend-blue-tg
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub "${VpcStackName}-VPC"
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  # Frontend Green Target Group
+  FrontendGreenTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: frontend-green-tg
+      Port: 80
+      Protocol: HTTP
+      TargetType: ip
+      VpcId:
+        Fn::ImportValue: !Sub "${VpcStackName}-VPC"
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 3
+
+  BackendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref BackendBlueTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 8080
+      Protocol: HTTP
+
+  FrontendListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref FrontendBlueTargetGroup
+      LoadBalancerArn: !Ref ALB
+      Port: 80
+      Protocol: HTTP
+
+  BackendService:
+    Type: AWS::ECS::Service
+    DependsOn: BackendListener
+    Properties:
+      ServiceName: project-one-backend
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref BackendTaskDefinition
+      DeploymentController:
+        Type: CODE_DEPLOY
+      DesiredCount: !Ref MinCapacity
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          Subnets:
+            Fn::Split:
+              - ','
+              - Fn::ImportValue: !Sub "${VpcStackName}-PrivateSubnets"
+      LoadBalancers:
+        - ContainerName: backend
+          ContainerPort: 8080
+          TargetGroupArn: !Ref BackendBlueTargetGroup
+
+  FrontendService:
+    Type: AWS::ECS::Service
+    DependsOn: FrontendListener
+    Properties:
+      ServiceName: project-one-frontend
+      Cluster: !Ref ECSCluster
+      TaskDefinition: !Ref FrontendTaskDefinition
+      DeploymentController:
+        Type: CODE_DEPLOY
+      DesiredCount: !Ref MinCapacity
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          SecurityGroups:
+            - !Ref ECSSecurityGroup
+          Subnets:
+            Fn::Split:
+              - ','
+              - Fn::ImportValue: !Sub "${VpcStackName}-PrivateSubnets"
+      LoadBalancers:
+        - ContainerName: frontend
+          ContainerPort: 80
+          TargetGroupArn: !Ref FrontendBlueTargetGroup
+
+  # Backend Auto Scaling
+  BackendAutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref MaxCapacity
+      MinCapacity: !Ref MinCapacity
+      ResourceId: !Join
+        - '/'
+        - - service
+          - !Ref ECSCluster
+          - !GetAtt BackendService.Name
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+
+  BackendAutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: BackendCPUScaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref BackendAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref CPUTargetValue
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # Frontend Auto Scaling
+  FrontendAutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref MaxCapacity
+      MinCapacity: !Ref MinCapacity
+      ResourceId: !Join
+        - '/'
+        - - service
+          - !Ref ECSCluster
+          - !GetAtt FrontendService.Name
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+      RoleARN: !Sub arn:aws:iam::${AWS::AccountId}:role/aws-service-role/ecs.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_ECSService
+
+  FrontendAutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: FrontendCPUScaling
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref FrontendAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ECSServiceAverageCPUUtilization
+        TargetValue: !Ref CPUTargetValue
+        ScaleInCooldown: 300
+        ScaleOutCooldown: 60
+
+  # CodeDeploy Application
+  CodeDeployApplication:
+    Type: AWS::CodeDeploy::Application
+    Properties:
+      ApplicationName: project-one-deploy
+      ComputePlatform: ECS
+
+  # Backend Deployment Group
+  BackendDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: backend-deploy-group
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      BlueGreenDeploymentConfiguration:
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+          WaitTimeInMinutes: 5
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 5
+      ECSServices:
+        - ClusterName: !Ref ECSCluster
+          ServiceName: !GetAtt BackendService.Name
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - ProdTrafficRoute:
+              ListenerArns:
+                - !Ref BackendListener
+            TargetGroups:
+              - Name: !GetAtt BackendBlueTargetGroup.TargetGroupName
+              - Name: !GetAtt BackendGreenTargetGroup.TargetGroupName
+
+  # Frontend Deployment Group (continued)
+  FrontendDeploymentGroup:
+    Type: AWS::CodeDeploy::DeploymentGroup
+    Properties:
+      ApplicationName: !Ref CodeDeployApplication
+      DeploymentGroupName: frontend-deploy-group
+      DeploymentConfigName: CodeDeployDefault.ECSAllAtOnce
+      ServiceRoleArn: !GetAtt CodeDeployServiceRole.Arn
+      BlueGreenDeploymentConfiguration:
+        DeploymentReadyOption:
+          ActionOnTimeout: CONTINUE_DEPLOYMENT
+          WaitTimeInMinutes: 5
+        TerminateBlueInstancesOnDeploymentSuccess:
+          Action: TERMINATE
+          TerminationWaitTimeInMinutes: 5
+      ECSServices:
+        - ClusterName: !Ref ECSCluster
+          ServiceName: !GetAtt FrontendService.Name
+      LoadBalancerInfo:
+        TargetGroupPairInfoList:
+          - ProdTrafficRoute:
+              ListenerArns:
+                - !Ref FrontendListener
+            TargetGroups:
+              - Name: !GetAtt FrontendBlueTargetGroup.TargetGroupName
+              - Name: !GetAtt FrontendGreenTargetGroup.TargetGroupName
+
+  # Event rule for backend image push to ECR
+  BackendImagePushEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: backend-image-push-rule
+      Description: "Rule to trigger deployment when backend image is pushed to ECR"
+      EventPattern:
+        source:
+          - aws.ecr
+        detail-type:
+          - ECR Image Action
+        detail:
+          action-type:
+            - PUSH
+          repository-name:
+            - project-one/backend
+          image-tag:
+            - latest
+      State: ENABLED
+      Targets:
+        - Arn: !Sub arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:${CodeDeployApplication}/${BackendDeploymentGroup}
+          Id: BackendDeploymentTarget
+          RoleArn: !GetAtt EventBridgeCodeDeployRole.Arn
+
+  # Event rule for frontend image push to ECR
+  FrontendImagePushEventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: frontend-image-push-rule
+      Description: "Rule to trigger deployment when frontend image is pushed to ECR"
+      EventPattern:
+        source:
+          - aws.ecr
+        detail-type:
+          - ECR Image Action
+        detail:
+          action-type:
+            - PUSH
+          repository-name:
+            - project-one/frontend
+          image-tag:
+            - latest
+      State: ENABLED
+      Targets:
+        - Arn: !Sub arn:aws:codedeploy:${AWS::Region}:${AWS::AccountId}:deploymentgroup:${CodeDeployApplication}/${FrontendDeploymentGroup}
+          Id: FrontendDeploymentTarget
+          RoleArn: !GetAtt EventBridgeCodeDeployRole.Arn
+
+  # IAM Role for EventBridge to trigger CodeDeploy
+  EventBridgeCodeDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AllowCodeDeployStartDeployment
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: codedeploy:StartDeployment
+                Resource: '*'
+
+Outputs:
+  ALBDNSName:
+    Description: DNS name of the Application Load Balancer
+    Value: !GetAtt ALB.DNSName
+    Export:
+      Name: !Sub "${AWS::StackName}-ALBDNSName"
+
+  ECSClusterName:
+    Description: Name of the ECS Cluster
+    Value: !Ref ECSCluster
+    Export:
+      Name: !Sub "${AWS::StackName}-ECSClusterName"
+
+  CodeDeployApplication:
+    Description: Name of the CodeDeploy Application
+    Value: !Ref CodeDeployApplication
+    Export:
+      Name: !Sub "${AWS::StackName}-CodeDeployApplication"
