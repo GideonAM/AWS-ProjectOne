@@ -16,24 +16,24 @@ import java.util.List;
 @CrossOrigin
 public class ObjectsController {
 
-    private final ObjectsService fileServerService;
+    private final ObjectsService objectsService;
 
     @PostMapping
     public ResponseEntity<String> uploadObject(
             @RequestParam(name = "file") MultipartFile file
     ) {
         return ResponseEntity.status(HttpStatus.CREATED)
-                .body(fileServerService.uploadObject(file));
+                .body(objectsService.uploadObject(file));
     }
 
     @GetMapping
     public ResponseEntity<List<S3ObjectInfo>> getObjects() {
-        return ResponseEntity.ok(fileServerService.getObjects());
+        return ResponseEntity.ok(objectsService.getObjects());
     }
 
     @DeleteMapping("/{fileId}")
     public ResponseEntity<String> deleteObjectByName(@PathVariable(name = "fileId") String fileId) {
-        return ResponseEntity.ok(fileServerService.deleteObjectByName(fileId));
+        return ResponseEntity.ok(objectsService.deleteObjectByName(fileId));
     }
 
 }
