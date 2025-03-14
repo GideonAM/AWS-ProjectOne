@@ -2,6 +2,6 @@ FROM openjdk:17
 
 ARG JAR_FILE=target/*.jar
 
-COPY ${JAR_FILE} project-one-backend.jar
+COPY ${JAR_FILE} backend-0.0.1-SNAPSHORT.jar
 
-ENTRYPOINT ["java", "-jar", "/project-one-backend.jar"]
+ENTRYPOINT ["java", "-jar", "backend-0.0.1-SNAPSHORT.jar"]
